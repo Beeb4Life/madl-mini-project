@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../models/vet_clinic.dart';
@@ -23,20 +21,15 @@ class VetsScreen extends StatefulWidget {
 class _VetsScreenState extends State<VetsScreen> {
   List<VetClinic> _clinics = [];
   bool _isLoading = true;
-  bool _emergencyOnly = false;
-  bool _isMapView = false;
+  String _selectedFilter = 'ALL'; // 'ALL', 'EMERGENCY', 'CENTRAL', 'WESTERN'
   final TextEditingController _searchController = TextEditingController();
-
-  final MapController _mapController = MapController();
-  LatLng? _userLocation;
-  VetClinic? _selectedClinicOnMap;
-  static const LatLng _defaultCityCenter = LatLng(19.0760, 72.8777);
+  Position? _userPosition;
 
   @override
   void initState() {
     super.initState();
     _loadClinics();
-    _fetchUserLocation(silent: true);
+    _fetchLocationSilently();
   }
 
   @override
@@ -45,88 +38,71 @@ class _VetsScreenState extends State<VetsScreen> {
     super.dispose();
   }
 
-  Future<void> _loadClinics() async {
-    setState(() => _isLoading = true);
-    final query = _searchController.text.trim();
-    final list = await DatabaseHelper.instance.getAllVets(
-      query: query.isNotEmpty ? query : null,
-      emergencyOnly: _emergencyOnly,
-    );
-
-    // If we have user location, calculate dynamic distance
-    if (_userLocation != null) {
-      for (int i = 0; i < list.length; i++) {
-        final c = list[i];
-        if (c.latitude != null && c.longitude != null) {
-          final meters = Geolocator.distanceBetween(
-            _userLocation!.latitude,
-            _userLocation!.longitude,
-            c.latitude!,
-            c.longitude!,
-          );
-          list[i] = c.copyWith(distanceKm: double.parse((meters / 1000).toStringAsFixed(1)));
-        }
-      }
-      list.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
-    }
-
-    setState(() {
-      _clinics = list;
-      _isLoading = false;
-    });
-  }
-
-  Future<void> _fetchUserLocation({bool silent = false}) async {
+  Future<void> _fetchLocationSilently() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (!silent && mounted) {
-          AppSnackBar.show(context, 'Please enable device location services.');
-        }
-        return;
-      }
+      if (!serviceEnabled) return;
 
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          if (!silent && mounted) {
-            AppSnackBar.show(context, 'Location permission was denied.');
-          }
-          return;
-        }
+        if (permission == LocationPermission.denied) return;
       }
+      if (permission == LocationPermission.deniedForever) return;
 
-      if (permission == LocationPermission.deniedForever) {
-        if (!silent && mounted) {
-          AppSnackBar.show(context, 'Location permission is permanently denied.');
-        }
-        return;
-      }
-
-      final position = await Geolocator.getCurrentPosition(
+      final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
       );
-
-      final newLoc = LatLng(position.latitude, position.longitude);
-      setState(() {
-        _userLocation = newLoc;
-      });
-
-      if (_isMapView) {
-        _mapController.move(newLoc, 13.5);
+      if (mounted) {
+        setState(() {
+          _userPosition = pos;
+        });
+        _loadClinics();
       }
+    } catch (_) {}
+  }
 
-      await _loadClinics();
+  Future<void> _loadClinics() async {
+    setState(() => _isLoading = true);
+    final query = _searchController.text.trim();
+    final isEmergencyOnly = _selectedFilter == 'EMERGENCY';
 
-      if (!silent && mounted) {
-        AppSnackBar.show(context, 'Live GPS location calibrated!');
-      }
-    } catch (e) {
-      if (!silent && mounted) {
-        AppSnackBar.show(context, 'Could not get GPS location: $e', isError: true);
-      }
+    final list = await DatabaseHelper.instance.getAllVets(
+      query: query.isNotEmpty ? query : null,
+      emergencyOnly: isEmergencyOnly,
+    );
+
+    // Apply area filter if selected
+    List<VetClinic> filtered = list;
+    if (_selectedFilter == 'CENTRAL') {
+      filtered = list.where((c) => c.city.contains('Parel') || c.city.contains('Worli')).toList();
+    } else if (_selectedFilter == 'WESTERN') {
+      filtered = list.where((c) => c.city.contains('Bandra') || c.city.contains('Khar')).toList();
     }
+
+    // Dynamic distance calculation if GPS is available
+    if (_userPosition != null) {
+      for (int i = 0; i < filtered.length; i++) {
+        final c = filtered[i];
+        if (c.latitude != null && c.longitude != null) {
+          final meters = Geolocator.distanceBetween(
+            _userPosition!.latitude,
+            _userPosition!.longitude,
+            c.latitude!,
+            c.longitude!,
+          );
+          filtered[i] = c.copyWith(
+            distanceKm: double.parse((meters / 1000).toStringAsFixed(1)),
+          );
+        }
+      }
+      filtered.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+    }
+
+    setState(() {
+      _clinics = filtered;
+      _isLoading = false;
+    });
   }
 
   Future<void> _togglePrimary(VetClinic clinic) async {
@@ -167,10 +143,10 @@ class _VetsScreenState extends State<VetsScreen> {
           side: BorderSide(color: AppColors.brd(context)),
         ),
         title: const Text(
-          'CALL VETERINARY CLINIC',
+          'CALL VETERINARY HOSPITAL',
           style: TextStyle(
             fontFamily: 'monospace',
-            fontSize: 15,
+            fontSize: 14,
             fontWeight: FontWeight.w700,
             letterSpacing: 1.0,
           ),
@@ -180,7 +156,7 @@ class _VetsScreenState extends State<VetsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Dial this number directly from your phone:',
+              'Hospital contact number:',
               style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 12),
@@ -215,22 +191,24 @@ class _VetsScreenState extends State<VetsScreen> {
     );
   }
 
-  Future<void> _openDirections(VetClinic clinic) async {
-    final destination = (clinic.latitude != null && clinic.longitude != null)
+  Future<void> _openGoogleMaps(VetClinic clinic) async {
+    // Universal Google Maps search & navigation intent with real Mumbai place query
+    final query = (clinic.latitude != null && clinic.longitude != null)
         ? '${clinic.latitude},${clinic.longitude}'
-        : Uri.encodeComponent('${clinic.name}, ${clinic.address}, ${clinic.city}');
-    final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$destination');
+        : Uri.encodeComponent('${clinic.name}, ${clinic.address}, Mumbai');
+    final mapsUrl = Uri.parse('https://www.google.com/maps/search/?api=1&query=$query');
+
     try {
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (await canLaunchUrl(mapsUrl)) {
+        await launchUrl(mapsUrl, mode: LaunchMode.externalApplication);
       } else {
         if (mounted) {
-          AppSnackBar.show(context, 'Address: ${clinic.address}, ${clinic.city}');
+          AppSnackBar.show(context, 'Location: ${clinic.address}, ${clinic.city}');
         }
       }
     } catch (_) {
       if (mounted) {
-        AppSnackBar.show(context, 'Address: ${clinic.address}, ${clinic.city}');
+        AppSnackBar.show(context, 'Location: ${clinic.address}, ${clinic.city}');
       }
     }
   }
@@ -257,8 +235,8 @@ class _VetsScreenState extends State<VetsScreen> {
     final nameCtrl = TextEditingController();
     final phoneCtrl = TextEditingController();
     final addressCtrl = TextEditingController();
-    final cityCtrl = TextEditingController(text: 'Metro City');
-    final servicesCtrl = TextEditingController(text: 'General Care, Vaccinations');
+    final cityCtrl = TextEditingController(text: 'Mumbai');
+    final servicesCtrl = TextEditingController(text: 'General Practice, Vaccinations');
     bool isEmergency = false;
 
     final created = await showModalBottomSheet<bool>(
@@ -287,7 +265,7 @@ class _VetsScreenState extends State<VetsScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          '// ADD VET CLINIC',
+                          '// ADD LOCAL VET CLINIC',
                           style: TextStyle(
                             fontFamily: 'monospace',
                             fontSize: 14,
@@ -306,8 +284,8 @@ class _VetsScreenState extends State<VetsScreen> {
                     TextField(
                       controller: nameCtrl,
                       decoration: const InputDecoration(
-                        labelText: 'CLINIC / VET NAME *',
-                        hintText: 'e.g. City Paws Animal Hospital',
+                        labelText: 'CLINIC / HOSPITAL NAME *',
+                        hintText: 'e.g. Bandra Pet Care Hospital',
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -316,7 +294,7 @@ class _VetsScreenState extends State<VetsScreen> {
                       keyboardType: TextInputType.phone,
                       decoration: const InputDecoration(
                         labelText: 'PHONE NUMBER *',
-                        hintText: 'e.g. +1 (555) 019-2834',
+                        hintText: 'e.g. +91 22 2600 0000',
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -324,7 +302,7 @@ class _VetsScreenState extends State<VetsScreen> {
                       controller: addressCtrl,
                       decoration: const InputDecoration(
                         labelText: 'STREET ADDRESS *',
-                        hintText: 'e.g. 102 Parkview Avenue',
+                        hintText: 'e.g. Hill Road, Bandra West',
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -354,7 +332,7 @@ class _VetsScreenState extends State<VetsScreen> {
                         ),
                       ),
                       subtitle: const Text(
-                        'Open all night with critical care emergency staff',
+                        'Open all night with critical trauma surgical staff',
                         style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
                       ),
                       value: isEmergency,
@@ -380,22 +358,18 @@ class _VetsScreenState extends State<VetsScreen> {
                           return;
                         }
 
-                        // Approximate offset coordinates from user or default
-                        final baseLat = _userLocation?.latitude ?? _defaultCityCenter.latitude;
-                        final baseLng = _userLocation?.longitude ?? _defaultCityCenter.longitude;
-
                         final clinic = VetClinic(
                           name: nameCtrl.text.trim(),
                           phone: phoneCtrl.text.trim(),
                           address: addressCtrl.text.trim(),
                           city: cityCtrl.text.trim(),
-                          distanceKm: 2.5,
+                          distanceKm: 3.5,
                           rating: 5.0,
                           isEmergency: isEmergency,
                           services: servicesCtrl.text.trim(),
                           isPrimary: false,
-                          latitude: baseLat + 0.005,
-                          longitude: baseLng + 0.005,
+                          latitude: 19.0760,
+                          longitude: 72.8777,
                           createdAt: DateTime.now().toIso8601String(),
                         );
 
@@ -417,7 +391,7 @@ class _VetsScreenState extends State<VetsScreen> {
     if (created == true) {
       _loadClinics();
       if (mounted) {
-        AppSnackBar.show(context, 'New vet clinic added to directory.');
+        AppSnackBar.show(context, 'New clinic added to directory.');
       }
     }
   }
@@ -432,34 +406,25 @@ class _VetsScreenState extends State<VetsScreen> {
             Icon(Icons.local_hospital_outlined, size: 20, color: AppColors.accentRed),
             SizedBox(width: 8),
             Text(
-              'VETS NEAR ME',
+              'VETS & EMERGENCY HOSPITALS',
               style: TextStyle(
                 fontFamily: 'monospace',
-                fontSize: 17,
+                fontSize: 15,
                 fontWeight: FontWeight.w800,
-                letterSpacing: 1.5,
+                letterSpacing: 1.0,
               ),
             ),
           ],
         ),
         actions: [
           IconButton(
-            icon: Icon(
-              _isMapView ? Icons.view_list_outlined : Icons.map_outlined,
-              color: Colors.white,
-            ),
-            tooltip: _isMapView ? 'Switch to List' : 'Switch to Interactive Map',
-            onPressed: () {
-              setState(() {
-                _isMapView = !_isMapView;
-                _selectedClinicOnMap = null;
-              });
-            },
-          ),
-          IconButton(
             icon: const Icon(Icons.my_location, size: 20),
-            tooltip: 'Update My GPS Location',
-            onPressed: () => _fetchUserLocation(silent: false),
+            tooltip: 'Calibrate Live GPS Proximity',
+            onPressed: () async {
+              await _fetchLocationSilently();
+              if (!context.mounted) return;
+              AppSnackBar.show(context, 'GPS distances updated for Mumbai region.');
+            },
           ),
           IconButton(
             icon: const Icon(Icons.add_location_alt_outlined),
@@ -480,7 +445,7 @@ class _VetsScreenState extends State<VetsScreen> {
                     controller: _searchController,
                     onChanged: (_) => _loadClinics(),
                     decoration: InputDecoration(
-                      hintText: 'Search clinics, services, or specialty...',
+                      hintText: 'Search Mumbai clinics, areas (Parel, Bandra, Worli)...',
                       prefixIcon: const Icon(Icons.search, size: 18),
                       suffixIcon: _searchController.text.isNotEmpty
                           ? IconButton(
@@ -495,131 +460,72 @@ class _VetsScreenState extends State<VetsScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      FilterChip(
-                        label: const Text(
-                          'ALL CLINICS',
-                          style: TextStyle(fontFamily: 'monospace', fontSize: 11, fontWeight: FontWeight.w700),
-                        ),
-                        selected: !_emergencyOnly,
-                        selectedColor: AppColors.surfElevated(context),
-                        backgroundColor: AppColors.surf(context),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          side: BorderSide(
-                            color: !_emergencyOnly ? Colors.white : AppColors.brd(context),
-                          ),
-                        ),
-                        onSelected: (_) {
-                          setState(() => _emergencyOnly = false);
-                          _loadClinics();
-                        },
-                      ),
-                      const SizedBox(width: 8),
-                      FilterChip(
-                        avatar: Container(
-                          width: 6,
-                          height: 6,
-                          decoration: const BoxDecoration(
-                            color: AppColors.accentRed,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        label: const Text(
-                          '24/7 EMERGENCY',
-                          style: TextStyle(fontFamily: 'monospace', fontSize: 11, fontWeight: FontWeight.w700),
-                        ),
-                        selected: _emergencyOnly,
-                        selectedColor: AppColors.accentRedDim,
-                        backgroundColor: AppColors.surf(context),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          side: BorderSide(
-                            color: _emergencyOnly ? AppColors.danger : AppColors.brd(context),
-                          ),
-                        ),
-                        onSelected: (_) {
-                          setState(() => _emergencyOnly = true);
-                          _loadClinics();
-                        },
-                      ),
-                      const Spacer(),
-                      // Map / List indicator badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppColors.surfElevated(context),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.brd(context)),
-                        ),
-                        child: Text(
-                          _isMapView ? '🗺️ OPENSTREETMAP' : '📋 LIST VIEW',
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ],
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _buildFilterChip('ALL', 'ALL CLINICS'),
+                        const SizedBox(width: 8),
+                        _buildFilterChip('EMERGENCY', '24/7 EMERGENCY', isRed: true),
+                        const SizedBox(width: 8),
+                        _buildFilterChip('CENTRAL', 'PAREL / WORLI'),
+                        const SizedBox(width: 8),
+                        _buildFilterChip('WESTERN', 'BANDRA / KHAR'),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
 
-            // Emergency Notice Banner
-            if (_emergencyOnly)
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.accentRedDim,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.danger),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Showing 24-hour critical emergency hospitals with live trauma & triage units.',
-                        style: TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ],
-                ),
+            // Live Google Maps Navigation Banner
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.surfElevated(context),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.brd(context)),
               ),
+              child: const Row(
+                children: [
+                  Icon(Icons.directions, size: 16, color: Colors.white),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tap "NAVIGATE" on any clinic to launch live turn-by-turn driving directions in Google Maps.',
+                      style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
-            // Main Content: Interactive OpenStreetMap OR List View
+            // Clinic List
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator(color: Colors.white))
-                  : _isMapView
-                      ? _buildInteractiveMap()
-                      : _clinics.isEmpty
-                          ? EmptyState(
-                              icon: Icons.local_hospital_outlined,
-                              title: 'NO CLINICS MATCHED',
-                              message: 'Try clearing your search or add a custom veterinary clinic.',
-                              actionLabel: 'ADD CLINIC',
-                              onAction: _openAddClinicDialog,
-                            )
-                          : RefreshIndicator(
-                              color: Colors.white,
-                              backgroundColor: AppColors.surf(context),
-                              onRefresh: _loadClinics,
-                              child: ListView.builder(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                itemCount: _clinics.length,
-                                itemBuilder: (context, index) {
-                                  final clinic = _clinics[index];
-                                  return _buildClinicCard(clinic);
-                                },
-                              ),
-                            ),
+                  : _clinics.isEmpty
+                      ? EmptyState(
+                          icon: Icons.local_hospital_outlined,
+                          title: 'NO CLINICS MATCHED',
+                          message: 'Try clearing search filters or add a custom veterinary clinic.',
+                          actionLabel: 'ADD CLINIC',
+                          onAction: _openAddClinicDialog,
+                        )
+                      : RefreshIndicator(
+                          color: Colors.white,
+                          backgroundColor: AppColors.surf(context),
+                          onRefresh: _loadClinics,
+                          child: ListView.builder(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            itemCount: _clinics.length,
+                            itemBuilder: (context, index) {
+                              final clinic = _clinics[index];
+                              return _buildClinicCard(clinic);
+                            },
+                          ),
+                        ),
             ),
           ],
         ),
@@ -627,170 +533,41 @@ class _VetsScreenState extends State<VetsScreen> {
     );
   }
 
-  // ==========================================
-  // INTERACTIVE OPENSTREETMAP (CartoDB Dark)
-  // ==========================================
-  Widget _buildInteractiveMap() {
-    final center = _userLocation ??
-        (_clinics.isNotEmpty && _clinics.first.latitude != null
-            ? LatLng(_clinics.first.latitude!, _clinics.first.longitude!)
-            : _defaultCityCenter);
-
-    // Build markers
-    final markers = <Marker>[];
-
-    // User location pin (Pulsing blue/cyan)
-    if (_userLocation != null) {
-      markers.add(
-        Marker(
-          point: _userLocation!,
-          width: 36,
-          height: 36,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.cyanAccent.withValues(alpha: 0.3),
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Container(
-                width: 16,
-                height: 16,
-                decoration: BoxDecoration(
-                  color: Colors.cyanAccent,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                ),
+  Widget _buildFilterChip(String key, String label, {bool isRed = false}) {
+    final isSelected = _selectedFilter == key;
+    return FilterChip(
+      avatar: isRed
+          ? Container(
+              width: 6,
+              height: 6,
+              decoration: const BoxDecoration(
+                color: AppColors.accentRed,
+                shape: BoxShape.circle,
               ),
-            ),
-          ),
+            )
+          : null,
+      label: Text(
+        label,
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: isSelected ? Colors.white : AppColors.textSecondary,
         ),
-      );
-    }
-
-    // Clinic markers
-    for (final clinic in _clinics) {
-      if (clinic.latitude != null && clinic.longitude != null) {
-        final isSelected = _selectedClinicOnMap?.id == clinic.id;
-        final isEmergency = clinic.isEmergency;
-
-        markers.add(
-          Marker(
-            point: LatLng(clinic.latitude!, clinic.longitude!),
-            width: isSelected ? 48 : 38,
-            height: isSelected ? 48 : 38,
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _selectedClinicOnMap = clinic;
-                });
-                _mapController.move(LatLng(clinic.latitude!, clinic.longitude!), 14.5);
-              },
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isEmergency ? AppColors.accentRed : AppColors.surf(context),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: isSelected ? Colors.white : (isEmergency ? AppColors.danger : AppColors.brd(context)),
-                    width: isSelected ? 2.5 : 1.5,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: isEmergency ? AppColors.accentRed.withValues(alpha: 0.5) : Colors.black45,
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Center(
-                  child: Icon(
-                    isEmergency ? Icons.local_hospital : Icons.pets,
-                    size: isSelected ? 22 : 18,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-    }
-
-    return Stack(
-      children: [
-        // Map Widget
-        FlutterMap(
-          mapController: _mapController,
-          options: MapOptions(
-            initialCenter: center,
-            initialZoom: 13.0,
-            onTap: (_, _) {
-              if (_selectedClinicOnMap != null) {
-                setState(() => _selectedClinicOnMap = null);
-              }
-            },
-          ),
-          children: [
-            // Dark Matter tile layer (Nothing OS styled monochrome tiles)
-            TileLayer(
-              urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-              subdomains: const ['a', 'b', 'c', 'd'],
-              userAgentPackageName: 'com.example.petsync',
-            ),
-            MarkerLayer(markers: markers),
-          ],
+      ),
+      selected: isSelected,
+      selectedColor: isRed ? AppColors.accentRedDim : AppColors.surfElevated(context),
+      backgroundColor: AppColors.surf(context),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+          color: isSelected ? (isRed ? AppColors.danger : Colors.white) : AppColors.brd(context),
         ),
-
-        // Map Controls Floating Bar
-        Positioned(
-          top: 12,
-          right: 12,
-          child: Column(
-            children: [
-              FloatingActionButton.small(
-                heroTag: 'map_recenter_user',
-                backgroundColor: AppColors.surf(context),
-                foregroundColor: Colors.white,
-                tooltip: 'My Location',
-                onPressed: () => _fetchUserLocation(silent: false),
-                child: const Icon(Icons.my_location, size: 18),
-              ),
-              const SizedBox(height: 8),
-              FloatingActionButton.small(
-                heroTag: 'map_zoom_in',
-                backgroundColor: AppColors.surf(context),
-                foregroundColor: Colors.white,
-                tooltip: 'Zoom In',
-                onPressed: () {
-                  final zoom = _mapController.camera.zoom + 1;
-                  _mapController.move(_mapController.camera.center, zoom);
-                },
-                child: const Icon(Icons.add, size: 18),
-              ),
-              const SizedBox(height: 8),
-              FloatingActionButton.small(
-                heroTag: 'map_zoom_out',
-                backgroundColor: AppColors.surf(context),
-                foregroundColor: Colors.white,
-                tooltip: 'Zoom Out',
-                onPressed: () {
-                  final zoom = _mapController.camera.zoom - 1;
-                  _mapController.move(_mapController.camera.center, zoom);
-                },
-                child: const Icon(Icons.remove, size: 18),
-              ),
-            ],
-          ),
-        ),
-
-        // Selected Clinic Bottom Sheet Card
-        if (_selectedClinicOnMap != null)
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 16,
-            child: _buildClinicCard(_selectedClinicOnMap!),
-          ),
-      ],
+      ),
+      onSelected: (_) {
+        setState(() => _selectedFilter = key);
+        _loadClinics();
+      },
     );
   }
 
@@ -802,7 +579,6 @@ class _VetsScreenState extends State<VetsScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
           children: [
             // Top badges & distance
             Row(
@@ -893,7 +669,7 @@ class _VetsScreenState extends State<VetsScreen> {
 
             const SizedBox(height: 4),
 
-            // Address
+            // Real Mumbai Address
             Row(
               children: [
                 const Icon(Icons.location_on_outlined, size: 14, color: AppColors.textMuted),
@@ -933,6 +709,7 @@ class _VetsScreenState extends State<VetsScreen> {
                   fontSize: 12,
                   fontStyle: FontStyle.italic,
                   color: AppColors.textMuted,
+                  height: 1.3,
                 ),
               ),
             ],
@@ -941,24 +718,24 @@ class _VetsScreenState extends State<VetsScreen> {
             const Divider(height: 1),
             const SizedBox(height: 10),
 
-            // Actions Row
+            // Actions Row with Google Maps Navigation & Calling
             Row(
               children: [
                 Expanded(
                   child: NothingButton(
-                    label: 'CALL NOW',
-                    icon: Icons.phone_outlined,
+                    label: 'NAVIGATE (MAPS)',
+                    icon: Icons.directions,
                     height: 38,
-                    onPressed: () => _makeCall(clinic.phone),
+                    onPressed: () => _openGoogleMaps(clinic),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: NothingButton.secondary(
-                    label: 'NAVIGATE',
-                    icon: Icons.directions_outlined,
+                    label: 'CALL',
+                    icon: Icons.phone_outlined,
                     height: 38,
-                    onPressed: () => _openDirections(clinic),
+                    onPressed: () => _makeCall(clinic.phone),
                   ),
                 ),
                 const SizedBox(width: 4),

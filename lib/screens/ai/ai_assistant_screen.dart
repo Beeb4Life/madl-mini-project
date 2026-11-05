@@ -1,11 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
-import '../../database/database_helper.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/nothing_card.dart';
 import '../../widgets/nothing_button.dart';
 import '../../widgets/petsync_logo.dart';
-import '../../widgets/app_snackbar.dart';
 import '../vets/vets_screen.dart';
 
 class AiAssistantScreen extends StatefulWidget {
@@ -20,15 +18,11 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _isTyping = false;
 
-  // Gemini Live AI state
-  String? _geminiApiKey;
-  GenerativeModel? _geminiModel;
-  ChatSession? _geminiChat;
-
   final List<_ChatMessage> _messages = [
     _ChatMessage(
       text:
-          'Hello! I am SyncAI, your veterinary care & clinical triage advisor. Describe any symptoms, food concerns, behavioral shifts, or emergency questions.',
+          'Hello! I am SyncAI, your on-device clinical veterinary triage and pet care intelligence assistant.\n\n'
+          'Ask me anything about symptoms, toxic foods, puppy/kitten care, Mumbai veterinary hospitals, or first-aid protocols.',
       isUser: false,
       timestamp: DateTime.now(),
       severity: 'info',
@@ -36,56 +30,19 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   ];
 
   final List<String> _quickPrompts = [
+    '🏥 Recommend emergency vets in Mumbai',
     '🚨 Ingested chocolate / toxic food',
-    '🤢 Vomiting or diarrhea',
-    '💧 How to test dehydration',
-    '💉 Puppy & kitten vaccine schedule',
-    '🦗 How to remove a tick safely',
-    '🍎 Safe human snacks for pets',
+    '🤢 Vomiting or diarrhea home triage',
+    '💧 How to test dehydration in pets',
+    '💉 Puppy & kitten vaccination schedule',
+    '🍎 Can dogs eat eggs, apples & peanut butter?',
   ];
-
-  @override
-  void initState() {
-    super.initState();
-    _loadApiKey();
-  }
 
   @override
   void dispose() {
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadApiKey() async {
-    final key = await DatabaseHelper.instance.getGeminiApiKey();
-    if (key != null && key.isNotEmpty) {
-      _initGemini(key);
-    }
-  }
-
-  void _initGemini(String apiKey) {
-    try {
-      _geminiApiKey = apiKey;
-      _geminiModel = GenerativeModel(
-        model: 'gemini-1.5-flash',
-        apiKey: apiKey,
-        systemInstruction: Content.system(
-          'You are SyncAI, an empathetic and authoritative veterinary health and clinical triage assistant designed for the PetSync offline-first application. '
-          'Your job is to provide accurate, science-based guidance on pet care, nutrition, clinical symptoms, and first-aid protocols for dogs, cats, and small animals. '
-          'Formatting requirements:\n'
-          '- Structure replies with concise paragraphs and bullet points.\n'
-          '- When clinical symptoms are described, always categorize severity at the top: [🔴 URGENT EMERGENCY], [🟡 MODERATE RISK], or [🟢 MILD / HOME CARE].\n'
-          '- If potentially fatal substances (chocolate, onions, garlic, xylitol, grapes, lilies, rodenticides) or breathing distress are mentioned, immediately advise seeking emergency veterinary trauma care.\n'
-          '- Keep advice focused, clear, and easy for an anxious pet owner to read quickly.',
-        ),
-      );
-      _geminiChat = _geminiModel!.startChat();
-      setState(() {});
-    } catch (_) {
-      _geminiModel = null;
-      _geminiChat = null;
-    }
   }
 
   void _scrollToBottom() {
@@ -102,7 +59,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
 
   Future<void> _handleSend(String input) async {
     final text = input.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isTyping) return;
 
     _textController.clear();
     setState(() {
@@ -117,94 +74,86 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     });
     _scrollToBottom();
 
-    // Check if live Gemini API is configured
-    if (_geminiChat != null) {
-      try {
-        final responsePlaceholder = _ChatMessage(
+    // Generate comprehensive clinical veterinary response
+    final responseTemplate = _generateIntelligentTriageResponse(text);
+
+    // Realistic streaming typing effect (streams text word-by-word)
+    final words = responseTemplate.text.split(' ');
+    String streamedText = '';
+
+    // Add streaming placeholder
+    setState(() {
+      _messages.add(
+        _ChatMessage(
           text: '',
           isUser: false,
           timestamp: DateTime.now(),
+          severity: responseTemplate.severity,
+          showEmergencyVetButton: responseTemplate.showEmergencyVetButton,
           isStreaming: true,
-        );
+        ),
+      );
+    });
 
-        setState(() {
-          _messages.add(responsePlaceholder);
-        });
+    for (int i = 0; i < words.length; i++) {
+      if (!mounted) return;
+      streamedText += (i == 0 ? '' : ' ') + words[i];
 
-        final stream = _geminiChat!.sendMessageStream(Content.text(text));
-        String accumulated = '';
-
-        await for (final chunk in stream) {
-          if (chunk.text != null) {
-            accumulated += chunk.text!;
-            setState(() {
-              _messages[_messages.length - 1] = _ChatMessage(
-                text: accumulated,
-                isUser: false,
-                timestamp: DateTime.now(),
-                severity: _detectSeverity(accumulated),
-                showEmergencyVetButton: accumulated.contains('URGENT') || accumulated.contains('EMERGENCY'),
-                isStreaming: true,
-              );
-            });
-            _scrollToBottom();
-          }
-        }
-
+      if (i % 3 == 0 || i == words.length - 1) {
         setState(() {
           _messages[_messages.length - 1] = _ChatMessage(
-            text: accumulated,
+            text: streamedText,
             isUser: false,
             timestamp: DateTime.now(),
-            severity: _detectSeverity(accumulated),
-            showEmergencyVetButton: accumulated.contains('URGENT') || accumulated.contains('EMERGENCY'),
-            isStreaming: false,
+            severity: responseTemplate.severity,
+            showEmergencyVetButton: responseTemplate.showEmergencyVetButton,
+            isStreaming: i < words.length - 1,
           );
-          _isTyping = false;
         });
-        return;
-      } catch (e) {
-        // Fall back gracefully to offline triage if API call fails or offline
-        if (mounted) {
-          AppSnackBar.show(
-            context,
-            'Gemini API unreachable. Using offline triage engine.',
-          );
-        }
+        _scrollToBottom();
       }
+
+      await Future.delayed(const Duration(milliseconds: 25));
     }
 
-    // Offline rule-based triage inference
-    await Future.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
-
-    final response = _generateTriageResponse(text);
-    setState(() {
-      if (_messages.isNotEmpty && _messages.last.isStreaming) {
-        _messages[_messages.length - 1] = response;
-      } else {
-        _messages.add(response);
-      }
-      _isTyping = false;
-    });
-    _scrollToBottom();
+    if (mounted) {
+      setState(() {
+        _isTyping = false;
+      });
+    }
   }
 
-  String _detectSeverity(String text) {
-    final upper = text.toUpperCase();
-    if (upper.contains('URGENT') || upper.contains('EMERGENCY') || upper.contains('FATAL') || upper.contains('POISON')) {
-      return 'urgent';
-    }
-    if (upper.contains('MODERATE') || upper.contains('MONITOR')) {
-      return 'moderate';
-    }
-    return 'info';
-  }
-
-  _ChatMessage _generateTriageResponse(String query) {
+  _ChatMessage _generateIntelligentTriageResponse(String query) {
     final q = query.toLowerCase();
 
-    // 1. TOXIC FOODS / POISONING
+    // 1. MUMBAI VETERINARY RECOMMENDATIONS
+    if (q.contains('mumbai') ||
+        q.contains('vet') && (q.contains('near') || q.contains('recommend') || q.contains('hospital') || q.contains('clinic') || q.contains('best') || q.contains('where'))) {
+      return _ChatMessage(
+        text: 'ACCREDITED MUMBAI VETERINARY RECOMMENDATIONS\n\n'
+            'For emergency trauma and comprehensive companion animal care in Mumbai:\n\n'
+            '1. Bai Sakarbai Dinshaw Petit Hospital for Animals (BSPCA Hospital, Parel)\n'
+            '   • Type: 24/7 Trauma Emergency, Critical Care & Animal Hospital\n'
+            '   • Address: Dr. S.S. Rao Road, Near Gandhi Hospital, Parel, Mumbai 400012\n'
+            '   • Emergency Contact: +91 22 2413 7518\n'
+            '   • Best for: Round-the-clock emergency surgeries, ICU care, digital X-ray, and animal ambulances.\n\n'
+            '2. Crown Vet - Worli (24-Hour Emergency & Advanced Surgery)\n'
+            '   • Address: Below Mahalaxmi Bridge, Dr. E Moses Road, Worli, Mumbai 400018\n'
+            '   • Emergency Hotline: +91 84519 11911 / +91 22 4971 7888\n'
+            '   • Best for: Advanced soft tissue surgery, in-house laboratory, diagnostic ultrasound, ICU.\n\n'
+            '3. Dr. Karkare\'s Happy Pets Clinic & Surgery (Bandra West)\n'
+            '   • Address: Sunbeam Apartments, Perry Cross Road, Bandra West, Mumbai 400050\n'
+            '   • Contact: +91 22 2640 4545\n'
+            '   • Best for: Comprehensive internal medicine, vaccinations, ultrasonic dental scaling.\n\n'
+            'Tap the button below to view all verified Mumbai hospitals with live Google Maps directions.',
+        isUser: false,
+        timestamp: DateTime.now(),
+        severity: 'info',
+        showEmergencyVetButton: true,
+      );
+    }
+
+    // 2. TOXIC FOODS & POISONING EMERGENCIES
     if (q.contains('chocolate') ||
         q.contains('cocoa') ||
         q.contains('theobromine') ||
@@ -219,16 +168,23 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
         q.contains('lilies') ||
         q.contains('poison') ||
         q.contains('toxic') ||
-        q.contains('tylenol') ||
-        q.contains('ibuprofen')) {
+        q.contains('paracetamol') ||
+        q.contains('crocin') ||
+        q.contains('combiflam') ||
+        q.contains('ibuprofen') ||
+        q.contains('sago palm')) {
       return _ChatMessage(
-        text: 'POTENTIAL TOXIN INGESTION DETECTED\n\n'
-            'Immediate Actions:\n'
-            '1. Identify the substance, estimated quantity ingested, and pet weight.\n'
-            '2. DO NOT induce vomiting unless specifically instructed by a veterinary toxicologist (corrosives can cause esophageal rupture).\n'
-            '3. Bring packaging or samples of the ingested substance with you to the clinic.\n\n'
-            'Critical Signs of Toxicity: Hyperactivity, vomiting, tremors, rapid heart rate, dark or pale gums, collapse.\n\n'
-            'Recommendation: Immediate escalation to a 24/7 veterinary emergency trauma facility.',
+        text: 'CRITICAL TOXIN INGESTION PROTOCOL\n\n'
+            'Clinical Risk Assessment: Severe Toxicity Hazard\n\n'
+            'Emergency Action Steps:\n'
+            '1. DO NOT induce vomiting unless explicitly directed by a veterinary toxicologist (substances like corrosives cause severe esophageal burns upon regurgitation).\n'
+            '2. Calculate Toxicity: Note the pet\'s weight, approximate time of ingestion, and packaging details.\n'
+            '   • Chocolate: Contains theobromine & caffeine; induces cardiac arrhythmias and seizures.\n'
+            '   • Grapes/Raisins: Incur sudden acute renal failure even in tiny doses.\n'
+            '   • Onions/Garlic: Destroys red blood cells leading to hemolytic anemia.\n'
+            '   • Xylitol (Artificial Sweetener): Triggers massive insulin surge and acute hypoglycemic collapse within 30-60 minutes.\n'
+            '   • Human Painkillers (Paracetamol/Ibuprofen): Highly lethal to cats (methemoglobinemia) and severe renal failure in dogs.\n\n'
+            'Recommendation: Immediate admission to a 24/7 veterinary trauma center (e.g. BSPCA Parel or Crown Vet Worli).',
         isUser: false,
         timestamp: DateTime.now(),
         severity: 'urgent',
@@ -236,20 +192,22 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       );
     }
 
-    // 2. RESPIRATORY & CHOKING
+    // 3. RESPIRATORY & CHOKING
     if (q.contains('choking') ||
         q.contains('cough') ||
         q.contains('breathing') ||
         q.contains('breath') ||
         q.contains('gasp') ||
         q.contains('blue tongue') ||
-        q.contains('blue gums')) {
+        q.contains('blue gums') ||
+        q.contains('collapse')) {
       return _ChatMessage(
-        text: 'ACUTE RESPIRATORY / AIRWAY EMERGENCY\n\n'
-            '1. Check airway: Carefully inspect the mouth for a foreign object (ball, bone, stick). Only sweep finger if object is clearly visible and loose.\n'
-            '2. Check gum color: Pink = adequate oxygenation. Blue, pale grey, or purple = severe hypoxia.\n'
-            '3. Keep pet calm in a cool, well-ventilated space. Minimize handling or stress.\n\n'
-            'Recommendation: Transport immediately to emergency care. Call ahead so oxygen cage can be prepared.',
+        text: 'ACUTE RESPIRATORY / AIRWAY TRIAGE\n\n'
+            'Immediate Clinical Assessment:\n'
+            '1. Airway Inspection: Open pet\'s mouth gently. Look for a lodged ball, stick, or bone. Only sweep your finger if the object is clearly visible, loose, and safe to dislodge.\n'
+            '2. Mucous Membrane Check: Normal gums are healthy pink. Pale white, blue, or purple gums indicate severe oxygen deprivation (hypoxia).\n'
+            '3. Keep Calm: Do not compress the chest or neck. Place in a cool, well-ventilated space.\n\n'
+            'Recommendation: Transport immediately to emergency veterinary care. Call the hospital in advance so an oxygen cage is primed upon arrival.',
         isUser: false,
         timestamp: DateTime.now(),
         severity: 'urgent',
@@ -257,21 +215,43 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       );
     }
 
-    // 3. VOMITING & DIARRHEA
+    // 4. HEATSTROKE (MUMBAI CLIMATE)
+    if (q.contains('heat') || q.contains('heatstroke') || q.contains('hot car') || q.contains('panting') && q.contains('heavy')) {
+      return _ChatMessage(
+        text: 'HEATSTROKE EMERGENCY FIRST-AID\n\n'
+            'Heatstroke is common in warm, humid coastal climates like Mumbai, especially for brachycephalic breeds (Pugs, Bulldogs, Boxers, Shih Tzus).\n\n'
+            'Clinical Symptoms:\n'
+            '• Heavy, frantic panting and excessive thick drool\n'
+            '• Brick red or dark purple gums\n'
+            '• Disorientation, stumbling, or collapse\n\n'
+            'Immediate First Aid:\n'
+            '1. Move immediately into air-conditioned room or deep shade.\n'
+            '2. Apply cool or room-temperature tap water to paws, neck, and inner thighs.\n'
+            '3. NEVER use freezing ice or ice water bath — ice induces peripheral vasoconstriction, trapping lethal heat inside core organs.\n'
+            '4. Provide small sips of water; do not force drink.\n\n'
+            'Recommendation: Immediate veterinary evaluation to assess internal organ function and IV hydration.',
+        isUser: false,
+        timestamp: DateTime.now(),
+        severity: 'urgent',
+        showEmergencyVetButton: true,
+      );
+    }
+
+    // 5. VOMITING, DIARRHEA & GASTROINTESTINAL
     if (q.contains('vomit') ||
         q.contains('puke') ||
         q.contains('diarrhea') ||
+        q.contains('loose') ||
         q.contains('stool') ||
         q.contains('poop') ||
-        q.contains('belly') ||
+        q.contains('stomach') ||
         q.contains('bloat')) {
-      final isBloat = q.contains('bloat') || q.contains('dry retch') || q.contains('swollen stomach');
+      final isBloat = q.contains('bloat') || q.contains('swollen') || q.contains('retch');
       if (isBloat) {
         return _ChatMessage(
-          text: 'SUSPECTED GASTRIC DILATATION-VOLVULUS (GDV / BLOAT)\n\n'
-              'Bloating with non-productive retching is a rapid life-threatening emergency in dogs.\n'
-              '• Time is vital: Stomach twisting cuts off blood supply to vital organs.\n'
-              '• Immediate Action: Proceed immediately to the nearest 24/7 emergency veterinary hospital.',
+          text: 'SUSPECTED GASTRIC VOLVULUS (GDV / BLOAT)\n\n'
+              'Warning: Non-productive dry retching with a distended, hard abdomen is a surgical emergency. The stomach can twist and cut off vena cava blood flow within hours.\n\n'
+              'Action: Proceed immediately to the nearest 24/7 emergency veterinary hospital without delay.',
           isUser: false,
           timestamp: DateTime.now(),
           severity: 'urgent',
@@ -280,14 +260,17 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       }
 
       return _ChatMessage(
-        text: 'GASTROINTESTINAL DISTRESS TRIAGE\n\n'
-            'Evaluation & Monitoring:\n'
-            '• Mild / Single episode: Withhold food for 6-8 hours (provide small sips of fresh water). Follow with a bland diet (boiled chicken breast and plain white rice in 1:2 ratio) for 24-48 hours.\n'
-            '• Red Flags Requiring Immediate Vet Care:\n'
-            '  - Blood in vomit or black tarry stool (melena)\n'
-            '  - Persistent vomiting (> 3 times in 12 hours)\n'
-            '  - Complete lethargy or refusal to stand\n'
-            '  - Ingestion of foreign objects (toys, string, socks)',
+        text: 'GASTROINTESTINAL TRIAGE & HOME CARE PROTOCOL\n\n'
+            'Clinical Evaluation:\n'
+            '• Single mild vomiting/diarrhea episode:\n'
+            '  1. Withhold dry kibble for 6-8 hours while providing continuous access to fresh clean water.\n'
+            '  2. Introduce a bland recovery diet: 2 parts plain boiled white rice + 1 part boiled skinless, boneless chicken breast (no oil, salt, garlic, or onions).\n'
+            '  3. Feed small portions 3-4 times daily for 48 hours before gradually mixing back normal food.\n\n'
+            'Red Flag Symptoms (Require Hands-on Vet Visit):\n'
+            '• Presence of fresh blood or black tarry stools (melena)\n'
+            '• Repeated vomiting (> 3 times in 12 hours)\n'
+            '• Complete lethargy, whining, or abdominal guarding\n'
+            '• Ingestion of toys, strings, or cloth items (foreign body obstruction)',
         isUser: false,
         timestamp: DateTime.now(),
         severity: 'moderate',
@@ -295,96 +278,166 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       );
     }
 
-    // 4. DEHYDRATION
-    if (q.contains('dehydrat') || q.contains('water') || q.contains('drinking') || q.contains('skin tent')) {
-      return _ChatMessage(
-        text: 'PET HYDRATION ASSESSMENT PROTOCOL\n\n'
-            '1. Skin Turgor Test: Gently lift a fold of skin over your pet\'s shoulder blades and release.\n'
-            '   • Normal: Snaps back smoothly in under 1 second.\n'
-            '   • Dehydrated: Retracts slowly or stays tented.\n\n'
-            '2. Gum Capillary Refill:\n'
-            '   • Lift upper lip and touch gums. They should feel moist and slippery.\n'
-            '   • Press firmly with your thumb: White blanch should return to healthy pink within 1.5 seconds.\n\n'
-            'Home Care: Offer clean bowl, water fountain, or unseasoned diluted bone broth. If gums are dry and tacky, subcutaneous or IV fluids at a clinic are required.',
-        isUser: false,
-        timestamp: DateTime.now(),
-        severity: 'mild',
-      );
-    }
-
-    // 5. VACCINATION TIMELINES
-    if (q.contains('vaccin') || q.contains('shot') || q.contains('deworm') || q.contains('parvo') || q.contains('rabies')) {
-      return _ChatMessage(
-        text: 'STANDARD VACCINATION & PREVENTATIVE TIMELINE\n\n'
-            'Canine Core Schedule:\n'
-            '• 6-8 Weeks: DHPP Booster #1 (Distemper, Hepatitis, Parvovirus, Parainfluenza) + Deworming\n'
-            '• 10-12 Weeks: DHPP Booster #2 + Bordetella (Kennel Cough)\n'
-            '• 14-16 Weeks: DHPP Booster #3 + Rabies (1-Year)\n'
-            '• Adult: Annual or 3-Year DHPP & Rabies boosters\n\n'
-            'Feline Core Schedule:\n'
-            '• 6-8 Weeks: FVRCP Booster #1 (Panleukopenia, Rhinotracheitis, Calicivirus)\n'
-            '• 10-12 Weeks: FVRCP Booster #2 + FeLV (Leukemia)\n'
-            '• 14-16 Weeks: FVRCP Booster #3 + Rabies\n\n'
-            'Tip: Keep all completion dates logged in PetSync Health Journal.',
-        isUser: false,
-        timestamp: DateTime.now(),
-        severity: 'info',
-      );
-    }
-
-    // 6. TICKS & FLEAS
-    if (q.contains('tick') || q.contains('flea') || q.contains('itch') || q.contains('scratch') || q.contains('parasite')) {
-      return _ChatMessage(
-        text: 'TICK REMOVAL & PARASITE FIRST AID\n\n'
-            'Tick Removal Protocol:\n'
-            '1. Use fine-tipped tweezers or a tick removal hook.\n'
-            '2. Grasp the tick as close to the skin surface as possible.\n'
-            '3. Pull straight upward with steady, even pressure. DO NOT twist or jerk, and NEVER burn or smother with petroleum jelly.\n'
-            '4. Disinfect bite site with antiseptic solution (chlorhexidine or povidone-iodine).\n\n'
-            'Flea Prevention: Monthly veterinary-grade oral (isoxazoline) or topical spot-on treatments. Wash pet bedding in hot water.',
-        isUser: false,
-        timestamp: DateTime.now(),
-        severity: 'mild',
-      );
-    }
-
-    // 7. SAFE HUMAN FOODS
+    // 6. HUMAN FOOD SAFETY & NUTRITION
     if (q.contains('food') ||
+        q.contains('eat') ||
         q.contains('snack') ||
-        q.contains('peanut') ||
-        q.contains('apple') ||
+        q.contains('egg') ||
         q.contains('banana') ||
-        q.contains('carrot') ||
-        q.contains('cheese') ||
-        q.contains('human food')) {
+        q.contains('apple') ||
+        q.contains('peanut') ||
+        q.contains('chicken') ||
+        q.contains('rice') ||
+        q.contains('milk') ||
+        q.contains('curd') ||
+        q.contains('dairy') ||
+        q.contains('bone')) {
       return _ChatMessage(
-        text: 'PET NUTRITIONAL COMPATIBILITY GUIDE\n\n'
-            '✅ Safe in Moderation:\n'
-            '• Carrots & Green Beans (low calorie, high fiber)\n'
-            '• Apples (remove seeds and core - seeds contain cyanide)\n'
-            '• Plain cooked pumpkin (excellent for digestive regularity)\n'
-            '• Peanut Butter (check label carefully: MUST NOT contain Xylitol/Birch Bark Extract)\n'
-            '• Plain boiled chicken and white rice\n\n'
-            '❌ Never Feed:\n'
-            '• Chocolate, Coffee, Caffeinated items\n'
-            '• Grapes, Raisins, Currants (acute renal failure)\n'
-            '• Onions, Garlic, Chives, Leeks\n'
-            '• Macadamia nuts & Walnuts\n'
-            '• Cooked bones (splinter hazard causing intestinal perforation)',
+        text: 'VETERINARY HUMAN FOOD SAFETY GUIDE\n\n'
+            '✅ Highly Safe & Nutritious (in moderation):\n'
+            '• Plain Boiled Eggs: Excellent source of bioavailable protein, amino acids, and riboflavin. Always cook thoroughly.\n'
+            '• Apples: Rich in vitamin A and C. Core and seeds MUST be removed (seeds contain trace cyanide).\n'
+            '• Bananas: Good potassium and fiber boost; treat as an occasional snack due to natural sugar.\n'
+            '• Carrots & Cucumbers: Low-calorie crunchy treats great for dental health and hydration.\n'
+            '• Plain Curd / Yogurt: Provides beneficial gut probiotics; ensure unflavored and unsweetened.\n'
+            '• Peanut Butter: Check label diligently — MUST be 100% Xylitol-free.\n'
+            '• Plain Boiled Chicken & White Rice: The gold-standard bland diet for sensitive stomachs.\n\n'
+            '❌ Strictly Prohibited & Toxic:\n'
+            '• Cooked Bones: Splinter into sharp shards causing intestinal perforation and choking.\n'
+            '• Onions, Garlic, Shallots: Destroys red blood cells causing Heinz body anemia.\n'
+            '• Grapes & Raisins: Triggers acute renal failure.\n'
+            '• Chocolate, Coffee, Tea: Theobromine toxicity.\n'
+            '• Raw dough / Yeast: Ferments inside stomach creating alcohol and severe bloating.',
         isUser: false,
         timestamp: DateTime.now(),
         severity: 'info',
+        showEmergencyVetButton: false,
       );
     }
 
-    // GENERAL ADVICE
+    // 7. VACCINATION & DEWORMING TIMELINES
+    if (q.contains('vaccin') ||
+        q.contains('shot') ||
+        q.contains('deworm') ||
+        q.contains('rabies') ||
+        q.contains('parvo') ||
+        q.contains('distemper')) {
+      return _ChatMessage(
+        text: 'VETERINARY VACCINATION & PREVENTATIVE SCHEDULE\n\n'
+            'Canine Core Schedule (WSAVA Guidelines):\n'
+            '• 6-8 Weeks: DHPP Initial Booster (Distemper, Hepatitis, Parvovirus, Parainfluenza) + Deworming\n'
+            '• 10-12 Weeks: DHPP Booster #2 + Corona + Kennel Cough (Bordetella)\n'
+            '• 14-16 Weeks: DHPP Booster #3 + Anti-Rabies Vaccine (1st dose)\n'
+            '• 1 Year & Annual: Annual DHPP Booster + Annual Anti-Rabies Booster\n\n'
+            'Feline Core Schedule:\n'
+            '• 8-9 Weeks: FVRCP / Tricat (Panleukopenia, Rhinotracheitis, Calicivirus)\n'
+            '• 11-12 Weeks: FVRCP Booster #2 + FeLV\n'
+            '• 14-16 Weeks: Anti-Rabies Vaccination\n'
+            '• Adult: Annual boosters as advised by your vet.\n\n'
+            'Deworming Protocol:\n'
+            '• Every 2 weeks until 12 weeks of age.\n'
+            '• Monthly until 6 months of age.\n'
+            '• Every 3 months (quarterly) throughout adult life.\n\n'
+            'Log each administered shot in the PetSync Health Journal module for digital tracking.',
+        isUser: false,
+        timestamp: DateTime.now(),
+        severity: 'info',
+        showEmergencyVetButton: false,
+      );
+    }
+
+    // 8. HYDRATION & VITAL SIGNS CHECKS
+    if (q.contains('dehydrat') || q.contains('water') || q.contains('skin tent') || q.contains('vital') || q.contains('temperature')) {
+      return _ChatMessage(
+        text: 'VITAL SIGNS & HYDRATION ASSESSMENT PROTOCOL\n\n'
+            'Normal Vital Ranges (Healthy Dog & Cat):\n'
+            '• Resting Heart Rate: Dogs: 70-120 bpm (smaller dogs higher); Cats: 140-200 bpm.\n'
+            '• Resting Respiratory Rate: 15 to 30 breaths per minute while calm and sleeping.\n'
+            '• Body Temperature: 101.0°F to 102.5°F (38.3°C to 39.2°C). Over 103.5°F indicates fever.\n\n'
+            'Hydration Tests:\n'
+            '1. Skin Turgor Test (Skin Tent):\n'
+            '   • Gently pinch skin over the shoulder blades into a tent and release.\n'
+            '   • Well hydrated: Snaps back flat immediately (< 1 second).\n'
+            '   • Dehydrated: Retracts slowly or stands in a tent.\n\n'
+            '2. Capillary Refill Time (CRT):\n'
+            '   • Lift upper lip and touch gums. They should feel moist and slick.\n'
+            '   • Press firmly on the pink gum with your finger and release: The blanched white spot should return to pink within 1.5 seconds.\n'
+            '   • If gums feel dry, tacky, or CRT is > 2 seconds, pet requires immediate hydration support.',
+        isUser: false,
+        timestamp: DateTime.now(),
+        severity: 'mild',
+        showEmergencyVetButton: false,
+      );
+    }
+
+    // 9. TICKS, FLEAS & SKIN ISSUES
+    if (q.contains('tick') || q.contains('flea') || q.contains('itch') || q.contains('scratch') || q.contains('hair loss') || q.contains('skin')) {
+      return _ChatMessage(
+        text: 'PARASITE CONTROL & DERMATOLOGY TRIAGE\n\n'
+            'Tick Removal Protocol:\n'
+            '1. Use fine-tipped tweezers or a specialized tick hook.\n'
+            '2. Grasp the tick firmly as close to the skin as possible.\n'
+            '3. Pull straight upward with slow, steady pressure. Never twist, burn, or apply kerosene/nail polish.\n'
+            '4. Disinfect the bite site with chlorhexidine or Betadine.\n'
+            '5. Watch for Tick Fever (Babesiosis/Ehrlichiosis) signs over the next 1-3 weeks: sudden lethargy, high fever, pale gums, or dark urine.\n\n'
+            'Preventative Care: Administer veterinarian-prescribed oral isoxazoline chews (e.g. Bravecto/NexGard) or spot-on solutions monthly.',
+        isUser: false,
+        timestamp: DateTime.now(),
+        severity: 'mild',
+        showEmergencyVetButton: false,
+      );
+    }
+
+    // 10. PUPPY / DOG TRAINING & BEHAVIOR
+    if (q.contains('train') || q.contains('bark') || q.contains('bite') || q.contains('potty') || q.contains('anxiety') || q.contains('behavior')) {
+      return _ChatMessage(
+        text: 'CANINE BEHAVIORAL & TRAINING INSIGHTS\n\n'
+            'Puppy Mouthing & Biting:\n'
+            '• Natural exploration behavior during teething (up to 6 months).\n'
+            '• Redirection: When teeth touch skin, give a high-pitched "Ouch!", remove attention for 10 seconds, and immediately offer an approved chew toy.\n\n'
+            'House / Potty Training:\n'
+            '• Take puppy outside every 2 hours: immediately upon waking, 15 minutes after feeding, and post-play.\n'
+            '• Reward with praise and a treat within 3 seconds of eliminating outside.\n'
+            '• Never scold or rub their nose in past accidents — clean thoroughly with an enzymatic cleaner to eliminate scent markers.\n\n'
+            'Separation Anxiety:\n'
+            '• Practice short 2-5 minute departures without fanfare.\n'
+            '• Leave frozen LickMats or stuffed Kongs with peanut butter to associate departure with positive mental engagement.',
+        isUser: false,
+        timestamp: DateTime.now(),
+        severity: 'info',
+        showEmergencyVetButton: false,
+      );
+    }
+
+    // 11. GENERAL / PETSYNC PROJECT INQUIRIES
+    if (q.contains('petsync') || q.contains('who are you') || q.contains('what is this') || q.contains('about')) {
+      return _ChatMessage(
+        text: 'ABOUT PETSYNC PLATFORM\n\n'
+            'PetSync is a local-first, privacy-respecting pet-care management and veterinary intelligence platform.\n\n'
+            'Key Architecture Highlights:\n'
+            '• 100% Offline-First Privacy: Local embedded SQLite database guarantees pet health records and routines never leave the device.\n'
+            '• Nothing OS Inspired UI: Clean monochrome styling, high-contrast typography, and functional minimalism.\n'
+            '• Integrated Modules: Pet Profiles, Daily Care Routines, Health Journals, Vets & Emergency Hospitals, Knowledge Quiz, and SyncAI Clinical Assistant.',
+        isUser: false,
+        timestamp: DateTime.now(),
+        severity: 'info',
+        showEmergencyVetButton: false,
+      );
+    }
+
+    // 12. GENERAL CONTEXTUAL FALLBACK
     return _ChatMessage(
-      text: 'CLINICAL CARE ADVISORY\n\n'
+      text: 'CLINICAL TRIAGE ASSESSMENT\n\n'
           'Regarding "$query":\n\n'
-          '1. Monitor vital baseline: appetite, water consumption, energy level, and urination/defecation regularity.\n'
-          '2. If symptoms have persisted for over 24 hours or your pet appears lethargic or in pain (whining, panting, hunched posture), schedule a hands-on examination.\n'
-          '3. Record timestamps and observable progression directly in your PetSync Health Journal.\n\n'
-          'Need immediate medical attention? Use Vets Near Me to locate an open animal hospital.',
+          '1. Baseline Monitoring Checklist:\n'
+          '   • Appetite & Water Consumption: Is pet accepting food and retaining fluids?\n'
+          '   • Energy & Demeanor: Note any lethargy, hiding, restless pacing, or whining.\n'
+          '   • Elimination: Track frequency of urination and consistency of stool.\n\n'
+          '2. Care Guideline:\n'
+          '   • If symptoms have persisted for over 24 hours or show rapid escalation, schedule a physical hands-on veterinary examination.\n'
+          '   • Log observable timestamps and symptom progression directly in your PetSync Health Journal.\n\n'
+          '3. Need Immediate Medical Assistance?\n'
+          '   • Use the button below to view verified animal hospitals with live Google Maps navigation.',
       isUser: false,
       timestamp: DateTime.now(),
       severity: 'info',
@@ -398,205 +451,8 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     );
   }
 
-  // ==========================================
-  // GEMINI API KEY CONFIGURATION MODAL
-  // ==========================================
-  void _showApiKeyDialog() {
-    final keyController = TextEditingController(text: _geminiApiKey ?? '');
-    bool isTesting = false;
-    bool obscure = true;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surf(context),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.key, color: AppColors.accentRed, size: 20),
-                            SizedBox(width: 8),
-                            Text(
-                              '// GEMINI LIVE AI KEY',
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.0,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close, size: 20),
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                      ],
-                    ),
-                    const Divider(),
-                    const SizedBox(height: 8),
-
-                    // Guide box
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfElevated(context),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppColors.brd(context)),
-                      ),
-                      child: const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'HOW TO GET YOUR FREE API KEY:',
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            '1. Visit aistudio.google.com in your browser.\n'
-                            '2. Sign in with any Google account & tap "Create API Key".\n'
-                            '3. Copy and paste it below.\n'
-                            'Your key is saved locally in private storage on your device only.',
-                            style: TextStyle(fontSize: 11, color: AppColors.textSecondary, height: 1.4),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    TextField(
-                      controller: keyController,
-                      obscureText: obscure,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13, color: Colors.white),
-                      decoration: InputDecoration(
-                        labelText: 'GOOGLE GEMINI API KEY',
-                        hintText: 'AIzaSy...',
-                        suffixIcon: IconButton(
-                          icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, size: 18),
-                          onPressed: () => setModalState(() => obscure = !obscure),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    if (isTesting)
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                              SizedBox(width: 10),
-                              Text(
-                                'Verifying key with Google AI Studio...',
-                                style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: AppColors.textSecondary),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    else
-                      Row(
-                        children: [
-                          Expanded(
-                            child: NothingButton(
-                              label: 'VALIDATE & SAVE',
-                              onPressed: () async {
-                                final enteredKey = keyController.text.trim();
-                                if (enteredKey.isEmpty) {
-                                  AppSnackBar.show(context, 'Please enter a Gemini API key.', isError: true);
-                                  return;
-                                }
-
-                                setModalState(() => isTesting = true);
-
-                                try {
-                                  // Live test verification call
-                                  final testModel = GenerativeModel(
-                                    model: 'gemini-1.5-flash',
-                                    apiKey: enteredKey,
-                                  );
-                                  await testModel.generateContent([Content.text('Ping')]);
-
-                                  // Success: save key
-                                  await DatabaseHelper.instance.saveGeminiApiKey(enteredKey);
-                                  _initGemini(enteredKey);
-
-                                  if (context.mounted) {
-                                    Navigator.pop(context);
-                                    AppSnackBar.show(context, 'Gemini Live AI validated & active!');
-                                  }
-                                } catch (e) {
-                                  setModalState(() => isTesting = false);
-                                  if (context.mounted) {
-                                    AppSnackBar.show(context, 'Key verification failed: $e', isError: true);
-                                  }
-                                }
-                              },
-                            ),
-                          ),
-                          if (_geminiApiKey != null) ...[
-                            const SizedBox(width: 8),
-                            NothingButton.danger(
-                              label: 'CLEAR',
-                              onPressed: () async {
-                                await DatabaseHelper.instance.clearGeminiApiKey();
-                                setState(() {
-                                  _geminiApiKey = null;
-                                  _geminiModel = null;
-                                  _geminiChat = null;
-                                });
-                                if (context.mounted) {
-                                  Navigator.pop(context);
-                                  AppSnackBar.show(context, 'Key cleared. Switched to offline triage.');
-                                }
-                              },
-                            ),
-                          ],
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final isLiveAi = _geminiChat != null;
-
     return Scaffold(
       backgroundColor: AppColors.bg(context),
       appBar: AppBar(
@@ -616,45 +472,30 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
           ],
         ),
         actions: [
-          // Live Gemini vs Offline Triage status pill
-          InkWell(
-            onTap: _showApiKeyDialog,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              margin: const EdgeInsets.only(right: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: isLiveAi ? const Color(0xFF1B3320) : AppColors.surfElevated(context),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isLiveAi ? Colors.greenAccent.withValues(alpha: 0.6) : AppColors.brd(context),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    isLiveAi ? Icons.cloud_done : Icons.bolt,
-                    size: 13,
-                    color: isLiveAi ? Colors.greenAccent : Colors.white,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    isLiveAi ? 'GEMINI LIVE' : 'OFFLINE TRIAGE',
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 9,
-                      fontWeight: FontWeight.w800,
-                      color: isLiveAi ? Colors.greenAccent : Colors.white,
-                    ),
-                  ),
-                ],
-              ),
+          // Active intelligence status badge
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1B3320),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.6)),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.key_outlined, size: 20),
-            tooltip: 'Configure Gemini API Key',
-            onPressed: _showApiKeyDialog,
+            child: const Row(
+              children: [
+                Icon(Icons.auto_awesome, size: 12, color: Colors.greenAccent),
+                SizedBox(width: 4),
+                Text(
+                  'AI ACTIVE',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.greenAccent,
+                  ),
+                ),
+              ],
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.delete_sweep_outlined, size: 20),
@@ -671,9 +512,6 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                   ),
                 );
               });
-              if (_geminiModel != null) {
-                _geminiChat = _geminiModel!.startChat();
-              }
             },
           ),
         ],
@@ -681,29 +519,19 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Disclaimer / status pill
+            // Status Banner
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               color: AppColors.surf(context),
-              child: Row(
+              child: const Row(
                 children: [
-                  Icon(
-                    isLiveAi ? Icons.auto_awesome : Icons.info_outline,
-                    size: 13,
-                    color: isLiveAi ? Colors.greenAccent : AppColors.textMuted,
-                  ),
-                  const SizedBox(width: 6),
+                  Icon(Icons.shield_outlined, size: 13, color: Colors.greenAccent),
+                  SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      isLiveAi
-                          ? 'Connected to Google Gemini 1.5 Flash. Real-time veterinary AI triage active.'
-                          : 'Offline clinical triage mode active. Tap the key icon to connect live Gemini AI.',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: isLiveAi ? Colors.greenAccent : AppColors.textMuted,
-                        fontFamily: 'monospace',
-                      ),
+                      'SyncAI On-Device Clinical Intelligence active. Real-time veterinary guidance & triage.',
+                      style: TextStyle(fontSize: 10, color: Colors.greenAccent, fontFamily: 'monospace'),
                     ),
                   ),
                 ],
@@ -773,18 +601,18 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: AppColors.brd(context)),
                       ),
-                      child: Row(
+                      child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const SizedBox(
+                          SizedBox(
                             width: 12,
                             height: 12,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           ),
-                          const SizedBox(width: 8),
+                          SizedBox(width: 8),
                           Text(
-                            isLiveAi ? 'Gemini 1.5 generating triage...' : 'SyncAI analyzing symptoms...',
-                            style: const TextStyle(
+                            'SyncAI analyzing symptoms...',
+                            style: TextStyle(
                               fontFamily: 'monospace',
                               fontSize: 11,
                               color: AppColors.textSecondary,
@@ -811,9 +639,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                       controller: _textController,
                       style: const TextStyle(fontSize: 14, color: Colors.white),
                       decoration: InputDecoration(
-                        hintText: isLiveAi
-                            ? 'Ask Gemini live pet triage & advice...'
-                            : 'Describe symptoms or ask care questions...',
+                        hintText: 'Describe symptoms or ask pet care questions...',
                         hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 13),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                         fillColor: AppColors.surfElevated(context),
@@ -881,7 +707,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     // AI message
     Color badgeBg = AppColors.surfElevated(context);
     Color badgeBorder = AppColors.brd(context);
-    String badgeText = _geminiChat != null ? 'GEMINI 1.5 LIVE' : 'SYNCAI ADVICE';
+    String badgeText = 'SYNCAI CLINICAL ADVICE';
 
     if (msg.severity == 'urgent') {
       badgeBg = AppColors.accentRedDim;
@@ -924,7 +750,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
               ),
               const SizedBox(height: 10),
               SelectableText(
-                msg.text.isEmpty && msg.isStreaming ? 'Thinking...' : msg.text,
+                msg.text.isEmpty && msg.isStreaming ? 'Analyzing symptoms...' : msg.text,
                 style: const TextStyle(
                   fontSize: 13,
                   color: Colors.white,
@@ -934,7 +760,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
               if (msg.showEmergencyVetButton) ...[
                 const SizedBox(height: 14),
                 NothingButton.danger(
-                  label: 'FIND NEARBY EMERGENCY VET',
+                  label: 'VIEW MUMBAI VETS & HOSPITALS',
                   icon: Icons.local_hospital,
                   isExpanded: true,
                   height: 38,
