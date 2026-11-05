@@ -33,18 +33,13 @@ class PetSyncApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: ThemeController.instance.themeModeNotifier,
-      builder: (context, themeMode, _) {
-        return MaterialApp(
-          title: 'PetSync',
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.lightTheme,
-          darkTheme: AppTheme.darkTheme,
-          themeMode: themeMode,
-          home: const MainNavigationScreen(),
-        );
-      },
+    return MaterialApp(
+      title: 'PetSync',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.darkTheme,
+      darkTheme: AppTheme.darkTheme,
+      themeMode: ThemeMode.dark,
+      home: const MainNavigationScreen(),
     );
   }
 }

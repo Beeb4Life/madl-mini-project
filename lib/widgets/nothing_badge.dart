@@ -6,6 +6,7 @@ class NothingBadge extends StatelessWidget {
   final bool isAccented;
   final bool isCompleted;
   final IconData? icon;
+  final double fontSize;
 
   const NothingBadge({
     super.key,
@@ -13,6 +14,7 @@ class NothingBadge extends StatelessWidget {
     this.isAccented = false,
     this.isCompleted = false,
     this.icon,
+    this.fontSize = 10,
   });
 
   @override
@@ -49,7 +51,7 @@ class NothingBadge extends StatelessWidget {
             label.toUpperCase(),
             style: TextStyle(
               fontFamily: 'monospace',
-              fontSize: 10,
+              fontSize: fontSize,
               fontWeight: FontWeight.w600,
               letterSpacing: 0.8,
               color: textColor,

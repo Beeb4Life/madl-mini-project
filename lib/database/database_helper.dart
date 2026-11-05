@@ -6,6 +6,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/pet.dart';
 import '../models/care_task.dart';
 import '../models/health_entry.dart';
+import '../models/vet_clinic.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -34,7 +35,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 4,
       onConfigure: _onConfigure,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
@@ -109,6 +110,25 @@ class DatabaseHelper {
         value TEXT NOT NULL
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE vets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        address TEXT NOT NULL,
+        city TEXT NOT NULL,
+        distance_km REAL NOT NULL,
+        rating REAL NOT NULL,
+        is_emergency INTEGER NOT NULL DEFAULT 0,
+        services TEXT NOT NULL,
+        is_primary INTEGER NOT NULL DEFAULT 0,
+        notes TEXT,
+        latitude REAL,
+        longitude REAL,
+        created_at TEXT NOT NULL
+      )
+    ''');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -126,6 +146,36 @@ class DatabaseHelper {
             value TEXT NOT NULL
           )
         ''');
+      } catch (_) {}
+    }
+    if (oldVersion < 3) {
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS vets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            address TEXT NOT NULL,
+            city TEXT NOT NULL,
+            distance_km REAL NOT NULL,
+            rating REAL NOT NULL,
+            is_emergency INTEGER NOT NULL DEFAULT 0,
+            services TEXT NOT NULL,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            latitude REAL,
+            longitude REAL,
+            created_at TEXT NOT NULL
+          )
+        ''');
+      } catch (_) {}
+    }
+    if (oldVersion < 4) {
+      try {
+        await db.execute('ALTER TABLE vets ADD COLUMN latitude REAL;');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE vets ADD COLUMN longitude REAL;');
       } catch (_) {}
     }
   }
@@ -155,6 +205,49 @@ class DatabaseHelper {
       return results.first['value'] as String?;
     }
     return null;
+  }
+
+  Future<bool> isProUser() async {
+    final val = await getSetting('is_pro');
+    return val == 'true';
+  }
+
+  Future<void> setProUser(bool isPro, {String tier = 'annual'}) async {
+    await saveSetting('is_pro', isPro ? 'true' : 'false');
+    if (isPro) {
+      await saveSetting('pro_tier', tier);
+      await saveSetting('pro_activated_at', DateTime.now().toIso8601String());
+    }
+  }
+
+  Future<String> getProTier() async {
+    final tier = await getSetting('pro_tier');
+    return tier ?? 'annual';
+  }
+
+  Future<int> getQuizHighScore() async {
+    final val = await getSetting('quiz_high_score');
+    return val != null ? int.tryParse(val) ?? 0 : 0;
+  }
+
+  Future<void> saveQuizHighScore(int score) async {
+    final current = await getQuizHighScore();
+    if (score > current) {
+      await saveSetting('quiz_high_score', score.toString());
+    }
+  }
+
+  Future<void> saveGeminiApiKey(String key) async {
+    await saveSetting('gemini_api_key', key.trim());
+  }
+
+  Future<String?> getGeminiApiKey() async {
+    return await getSetting('gemini_api_key');
+  }
+
+  Future<void> clearGeminiApiKey() async {
+    final db = await database;
+    await db.delete('app_settings', where: 'key = ?', whereArgs: ['gemini_api_key']);
   }
 
   // ==========================================
@@ -468,5 +561,170 @@ class DatabaseHelper {
         notes: 'Stable healthy weight. Maintained active play.',
       ),
     );
+  }
+
+  // ==========================================
+  // VETS DIRECTORY CRUD
+  // ==========================================
+
+  Future<List<VetClinic>> getAllVets({
+    String? query,
+    bool? emergencyOnly,
+  }) async {
+    final db = await database;
+    
+    // Check if table is empty, auto-seed defaults
+    final count = Sqflite.firstIntValue(
+      await db.rawQuery('SELECT COUNT(*) FROM vets'),
+    );
+    if (count == null || count == 0) {
+      await seedDefaultVets();
+    }
+
+    String? whereClause;
+    List<dynamic> whereArgs = [];
+
+    if (emergencyOnly == true) {
+      whereClause = 'is_emergency = 1';
+    }
+
+    if (query != null && query.trim().isNotEmpty) {
+      final term = '%${query.trim()}%';
+      final qClause = '(name LIKE ? OR address LIKE ? OR services LIKE ? OR city LIKE ?)';
+      whereClause = whereClause != null ? '$whereClause AND $qClause' : qClause;
+      whereArgs.addAll([term, term, term, term]);
+    }
+
+    final maps = await db.query(
+      'vets',
+      where: whereClause,
+      whereArgs: whereArgs.isNotEmpty ? whereArgs : null,
+      orderBy: 'is_emergency DESC, distance_km ASC',
+    );
+
+    return maps.map((m) => VetClinic.fromMap(m)).toList();
+  }
+
+  Future<int> insertVet(VetClinic vet) async {
+    final db = await database;
+    return await db.insert('vets', vet.toMap());
+  }
+
+  Future<int> updateVet(VetClinic vet) async {
+    final db = await database;
+    return await db.update(
+      'vets',
+      vet.toMap(),
+      where: 'id = ?',
+      whereArgs: [vet.id],
+    );
+  }
+
+  Future<int> deleteVet(int id) async {
+    final db = await database;
+    return await db.delete(
+      'vets',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> setPrimaryVet(int id, bool isPrimary) async {
+    final db = await database;
+    if (isPrimary) {
+      // Clear previous primary
+      await db.update('vets', {'is_primary': 0});
+    }
+    await db.update(
+      'vets',
+      {'is_primary': isPrimary ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> seedDefaultVets() async {
+    final now = DateTime.now().toIso8601String();
+    final defaultClinics = [
+      VetClinic(
+        name: 'Metro 24/7 Animal Trauma & Emergency Hospital',
+        phone: '+1 (555) 911-7387',
+        address: '404 North Central Ave',
+        city: 'Downtown Metro',
+        distanceKm: 0.8,
+        rating: 4.9,
+        isEmergency: true,
+        services: 'ICU Trauma, Emergency Surgery, Oxygen Therapy, Blood Bank, Digital X-Ray',
+        isPrimary: true,
+        notes: 'Open 24/7 with veterinary surgeons and critical care triage team on duty.',
+        latitude: 19.0760,
+        longitude: 72.8777,
+        createdAt: now,
+      ),
+      VetClinic(
+        name: 'Companion Care Veterinary Clinic',
+        phone: '+1 (555) 234-5678',
+        address: '128 Oakridge Blvd',
+        city: 'Metro City',
+        distanceKm: 1.5,
+        rating: 4.8,
+        isEmergency: false,
+        services: 'Wellness Exams, Routine Vaccinations, Microchipping, Parasite Prevention',
+        isPrimary: false,
+        notes: 'Friendly neighborhood family veterinary clinic. Appointment-based with walk-ins welcome.',
+        latitude: 19.0835,
+        longitude: 72.8850,
+        createdAt: now,
+      ),
+      VetClinic(
+        name: 'Apex Pet Dental & Specialized Surgery Center',
+        phone: '+1 (555) 876-5432',
+        address: '782 West Highland Way',
+        city: 'Westside',
+        distanceKm: 2.3,
+        rating: 4.9,
+        isEmergency: false,
+        services: 'Dental Ultrasonic Scaling, Ultrasound, Orthopedics, Endoscopy, Oncology',
+        isPrimary: false,
+        notes: 'Board-certified veterinary dental specialists and advanced orthopedic surgery.',
+        latitude: 19.0680,
+        longitude: 72.8690,
+        createdAt: now,
+      ),
+      VetClinic(
+        name: 'All-Hours Emergency Vet & Urgent Care',
+        phone: '+1 (555) 999-8387',
+        address: '550 East Expressway, Suite B',
+        city: 'Metro City',
+        distanceKm: 3.1,
+        rating: 4.7,
+        isEmergency: true,
+        services: '24/7 Emergency Triage, Toxicology & Poisoning, Foreign Body Removal, Critical Care',
+        isPrimary: false,
+        notes: 'Direct emergency admission hotline for suspected toxin ingestion and severe trauma.',
+        latitude: 19.0920,
+        longitude: 72.8720,
+        createdAt: now,
+      ),
+      VetClinic(
+        name: 'Northside Avian, Exotic & Small Animal Clinic',
+        phone: '+1 (555) 345-6789',
+        address: '910 Meadow Lane',
+        city: 'North Metro',
+        distanceKm: 4.0,
+        rating: 4.8,
+        isEmergency: false,
+        services: 'Exotic Mammals, Birds, Rabbits, Reptiles, Specialized Avian Care & Nutrition',
+        isPrimary: false,
+        notes: 'Specialist care for pocket pets, reptiles, parrots, and non-traditional companions.',
+        latitude: 19.0890,
+        longitude: 72.8940,
+        createdAt: now,
+      ),
+    ];
+
+    for (final clinic in defaultClinics) {
+      await insertVet(clinic);
+    }
   }
 }

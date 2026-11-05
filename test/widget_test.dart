@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:petsync/models/pet.dart';
 import 'package:petsync/models/care_task.dart';
 import 'package:petsync/models/health_entry.dart';
+import 'package:petsync/models/vet_clinic.dart';
+import 'package:petsync/widgets/petsync_logo.dart';
 import 'package:petsync/theme/theme_controller.dart';
 import 'package:petsync/main.dart';
 
@@ -89,6 +91,39 @@ void main() {
       expect(fromMap.imagePath, '/path/to/receipt.jpg');
     });
 
+    test('VetClinic model serialization and emergency badge handling', () {
+      const clinic = VetClinic(
+        id: 3,
+        name: 'Metro 24/7 Animal Hospital',
+        phone: '+1 555-911-PETS',
+        address: '404 North Central Ave',
+        city: 'Metro City',
+        distanceKm: 0.8,
+        rating: 4.9,
+        isEmergency: true,
+        services: 'ICU, Surgery, Oxygen',
+        isPrimary: true,
+        createdAt: '2026-11-05',
+      );
+
+      final map = clinic.toMap();
+      expect(map['name'], 'Metro 24/7 Animal Hospital');
+      expect(map['is_emergency'], 1);
+      expect(map['is_primary'], 1);
+      expect(map['distance_km'], 0.8);
+
+      final fromMap = VetClinic.fromMap(map);
+      expect(fromMap.id, 3);
+      expect(fromMap.name, clinic.name);
+      expect(fromMap.isEmergency, true);
+      expect(fromMap.isPrimary, true);
+
+      final updated = clinic.copyWith(name: 'Metro Emergency Animal Hospital', isPrimary: false);
+      expect(updated.name, 'Metro Emergency Animal Hospital');
+      expect(updated.isPrimary, false);
+      expect(updated.isEmergency, true);
+    });
+
     test('ThemeController toggles theme mode', () {
       final controller = ThemeController.instance;
       controller.themeModeNotifier.value = ThemeMode.dark;
@@ -111,6 +146,8 @@ void main() {
       expect(find.text('PETS'), findsOneWidget);
       expect(find.text('CARE'), findsOneWidget);
       expect(find.text('HEALTH'), findsOneWidget);
+      expect(find.text('DISCOVER'), findsOneWidget);
+      expect(find.byType(PetSyncLogo), findsWidgets);
     });
   });
 }

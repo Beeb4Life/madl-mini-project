@@ -4,12 +4,14 @@ import '../../database/database_helper.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/nothing_card.dart';
 import '../../widgets/nothing_badge.dart';
+import '../../widgets/nothing_button.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/confirmation_dialog.dart';
 import '../../widgets/pet_avatar.dart';
 import '../../widgets/app_snackbar.dart';
 import 'pet_form_screen.dart';
 import 'pet_detail_screen.dart';
+import '../pricing/pricing_screen.dart';
 
 class PetsScreen extends StatefulWidget {
   const PetsScreen({super.key});
@@ -38,6 +40,59 @@ class _PetsScreenState extends State<PetsScreen> {
   }
 
   Future<void> _openAddPet() async {
+    final isPro = await DatabaseHelper.instance.isProUser();
+    if (!isPro && _pets.length >= 2) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: AppColors.surf(context),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: AppColors.brd(context)),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.workspace_premium_outlined, color: AppColors.accentRed, size: 22),
+              SizedBox(width: 8),
+              Text(
+                'FREE TIER PET LIMIT',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'Free Starter tier supports up to 2 pet profiles.\n\nUpgrade to PetSync Pro for unlimited pet profiles, SyncAI emergency triage, and PDF medical record exports.',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.4),
+          ),
+          actions: [
+            NothingButton.secondary(
+              label: 'NOT NOW',
+              height: 38,
+              onPressed: () => Navigator.pop(context),
+            ),
+            NothingButton(
+              label: 'VIEW PRO PLANS',
+              height: 38,
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const PricingScreen()))
+                    .then((_) => _loadPets());
+              },
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(builder: (context) => const PetFormScreen()),
     );

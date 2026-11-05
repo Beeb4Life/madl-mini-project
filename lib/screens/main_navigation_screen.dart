@@ -4,6 +4,7 @@ import 'home_screen.dart';
 import 'pets/pets_screen.dart';
 import 'care/care_screen.dart';
 import 'health/health_screen.dart';
+import 'discover/discover_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
@@ -28,6 +29,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       const PetsScreen(),
       const CareScreen(),
       const HealthScreen(),
+      const DiscoverScreen(),
     ];
 
     return Scaffold(
@@ -69,6 +71,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               icon: Icon(Icons.favorite_border),
               activeIcon: Icon(Icons.favorite),
               label: 'HEALTH',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.explore_outlined),
+              activeIcon: Icon(Icons.explore),
+              label: 'DISCOVER',
             ),
           ],
         ),

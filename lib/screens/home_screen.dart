@@ -3,17 +3,20 @@ import '../models/pet.dart';
 import '../models/care_task.dart';
 import '../database/database_helper.dart';
 import '../theme/app_colors.dart';
-import '../theme/theme_controller.dart';
 import '../widgets/nothing_card.dart';
 import '../widgets/nothing_badge.dart';
 import '../widgets/nothing_button.dart';
 import '../widgets/section_header.dart';
 import '../widgets/pet_avatar.dart';
 import '../widgets/app_snackbar.dart';
+import '../widgets/petsync_logo.dart';
 import 'pets/pet_form_screen.dart';
 import 'pets/pet_detail_screen.dart';
 import 'care/care_task_form_dialog.dart';
-import 'health/health_entry_form_dialog.dart';
+import 'ai/ai_assistant_screen.dart';
+import 'vets/vets_screen.dart';
+import 'quiz/quiz_screen.dart';
+import 'pricing/pricing_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(int tabIndex)? onNavigateTab;
@@ -29,6 +32,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<CareTask> _todayTasks = [];
   Map<String, int> _taskStats = {'total': 0, 'completed': 0, 'pending': 0};
   int _healthEntryCount = 0;
+  bool _isPro = false;
   bool _isLoading = true;
 
   @override
@@ -44,12 +48,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final tasks = await DatabaseHelper.instance.getTasksForDate(today);
     final stats = await DatabaseHelper.instance.getTodayTaskStats();
     final healthCount = await DatabaseHelper.instance.getHealthEntryCount();
+    final pro = await DatabaseHelper.instance.isProUser();
 
     setState(() {
       _pets = pets;
       _todayTasks = tasks;
       _taskStats = stats;
       _healthEntryCount = healthCount;
+      _isPro = pro;
       _isLoading = false;
     });
   }
@@ -60,6 +66,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _addPet() async {
+    if (!_isPro && _pets.length >= 2) {
+      _showProLimitDialog();
+      return;
+    }
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(builder: (context) => const PetFormScreen()),
     );
@@ -68,23 +78,61 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _showProLimitDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surf(context),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: AppColors.brd(context)),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.workspace_premium_outlined, color: AppColors.accentRed, size: 22),
+            SizedBox(width: 8),
+            Text(
+              'FREE TIER PET LIMIT',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Free Starter tier supports up to 2 pet profiles.\n\nUpgrade to PetSync Pro for unlimited pet profiles, SyncAI emergency triage, and PDF medical record exports.',
+          style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.4),
+        ),
+        actions: [
+          NothingButton.secondary(
+            label: 'NOT NOW',
+            height: 38,
+            onPressed: () => Navigator.pop(context),
+          ),
+          NothingButton(
+            label: 'VIEW PRO PLANS',
+            height: 38,
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const PricingScreen()))
+                  .then((_) => _loadData());
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _addTask() async {
     if (_pets.isEmpty) {
       AppSnackBar.show(context, 'Please register a pet profile first.');
       return;
     }
     final created = await CareTaskFormDialog.show(context);
-    if (created == true) {
-      _loadData();
-    }
-  }
-
-  Future<void> _addHealthEntry() async {
-    if (_pets.isEmpty) {
-      AppSnackBar.show(context, 'Please register a pet profile first.');
-      return;
-    }
-    final created = await HealthEntryFormDialog.show(context);
     if (created == true) {
       _loadData();
     }
@@ -132,46 +180,49 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: AppColors.bg(context),
       appBar: AppBar(
-        title: Row(
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              margin: const EdgeInsets.only(right: 10),
-              decoration: const BoxDecoration(
-                color: AppColors.accentRed,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const Text(
-              'PETSYNC',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 2.0,
-              ),
-            ),
-          ],
-        ),
+        title: PetSyncLogo(size: 24, showText: true, isPro: _isPro),
         actions: [
-          ValueListenableBuilder<ThemeMode>(
-            valueListenable: ThemeController.instance.themeModeNotifier,
-            builder: (context, mode, _) {
-              final isDark = mode == ThemeMode.dark;
-              return IconButton(
-                icon: Icon(
-                  isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
-                  size: 20,
-                  color: AppColors.txt(context),
-                ),
-                tooltip: isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode',
-                onPressed: () => ThemeController.instance.toggleTheme(),
+          IconButton(
+            icon: const Icon(Icons.auto_awesome, color: AppColors.accentRed, size: 20),
+            tooltip: 'SyncAI Clinical Assistant',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AiAssistantScreen()),
               );
             },
           ),
+          InkWell(
+            onTap: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const PricingScreen()),
+              );
+              _loadData();
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              margin: const EdgeInsets.only(right: 6),
+              decoration: BoxDecoration(
+                color: _isPro ? AppColors.accentRed : AppColors.surfElevated(context),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _isPro ? AppColors.accentRed : AppColors.brd(context),
+                ),
+              ),
+              child: Text(
+                _isPro ? 'PRO' : 'UPGRADE',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ),
+          ),
           Padding(
-            padding: const EdgeInsets.only(right: 16),
+            padding: const EdgeInsets.only(right: 14),
             child: Center(
               child: Text(
                 _formatTodayHeader(),
@@ -379,9 +430,195 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: NothingButton.secondary(
-                            label: '+ HEALTH',
+                            label: 'SYNCAI',
+                            icon: Icons.auto_awesome,
                             height: 42,
-                            onPressed: _addHealthEntry,
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => const AiAssistantScreen()),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: NothingButton.secondary(
+                            label: 'VETS',
+                            icon: Icons.local_hospital_outlined,
+                            height: 42,
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => const VetsScreen()),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Smart Tools & Services Section
+                    SectionHeader(
+                      codePrefix: '// 02',
+                      title: 'SMART TOOLS & TRIAGE',
+                      actionText: 'MORE',
+                      onActionTap: () => widget.onNavigateTab?.call(4),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: NothingCard(
+                            hasRedDot: true,
+                            padding: const EdgeInsets.all(14),
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => const AiAssistantScreen()),
+                              );
+                            },
+                            child: const Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.auto_awesome, size: 16, color: Colors.white),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'SYNCAI',
+                                      style: TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  'Symptom checker & clinical first-aid triage',
+                                  style: TextStyle(fontSize: 11, color: AppColors.textSecondary, height: 1.3),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: NothingCard(
+                            padding: const EdgeInsets.all(14),
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => const VetsScreen()),
+                              );
+                            },
+                            child: const Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.local_hospital_outlined, size: 16, color: AppColors.accentRed),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'VETS NEAR ME',
+                                      style: TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  '24/7 hospitals, phone dialer & maps directions',
+                                  style: TextStyle(fontSize: 11, color: AppColors.textSecondary, height: 1.3),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: NothingCard(
+                            padding: const EdgeInsets.all(14),
+                            onTap: () async {
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => const QuizScreen()),
+                              );
+                              _loadData();
+                            },
+                            child: const Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.psychology_outlined, size: 16, color: Colors.white),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'CARE QUIZ',
+                                      style: TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  'Test pet knowledge & daily hydration/calorie calc',
+                                  style: TextStyle(fontSize: 11, color: AppColors.textSecondary, height: 1.3),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: NothingCard(
+                            hasRedDot: _isPro,
+                            padding: const EdgeInsets.all(14),
+                            onTap: () async {
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => const PricingScreen()),
+                              );
+                              _loadData();
+                            },
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Icon(Icons.monetization_on_outlined, size: 16, color: AppColors.accentRed),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      _isPro ? 'PRO ACTIVE' : 'PRO PLANS',
+                                      style: const TextStyle(
+                                        fontFamily: 'monospace',
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _isPro
+                                      ? 'Unlimited pets & premium features unlocked'
+                                      : 'SaaS freemium plans & business model canvas',
+                                  style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, height: 1.3),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -391,7 +628,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Today's Care Summary Section
                     SectionHeader(
-                      codePrefix: '// 02',
+                      codePrefix: '// 03',
                       title: 'TODAY\'S CARE ROUTINE',
                       actionText: 'VIEW ALL',
                       onActionTap: () => widget.onNavigateTab?.call(2),
@@ -507,7 +744,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Pet Profiles Overview Section
                     SectionHeader(
-                      codePrefix: '// 03',
+                      codePrefix: '// 04',
                       title: 'REGISTERED PETS',
                       actionText: 'MANAGE',
                       onActionTap: () => widget.onNavigateTab?.call(1),
